@@ -38,32 +38,11 @@ let
   yamlFormat = pkgs.formats.yaml { };
   jsonFormat = pkgs.formats.json { };
 
-  # Mirrors goose's on-disk layout (see crates/goose/src/config/paths.rs).
-  # Linux: XDG config dir. macOS: the "Block/goose" Application Support dir
-  # kept for backwards compatibility with existing installations.
-  relConfigDir =
-    if pkgs.stdenv.hostPlatform.isDarwin
-    then "Library/Application Support/Block/goose"
-    else "${config.xdg.configHome}/goose";
-
-  # home.file takes paths relative to $HOME; xdg.configFile takes paths
-  # relative to $XDG_CONFIG_HOME. We normalise to home.file entries so one
-  # code path works on both platforms.
-  homeRelative = path:
-    if pkgs.stdenv.hostPlatform.isDarwin
-    then "${relConfigDir}/${path}"
-    else
-      let prefix = "${config.home.homeDirectory}/";
-      in
-        if lib.hasPrefix prefix "${relConfigDir}/${path}"
-        then lib.removePrefix prefix "${relConfigDir}/${path}"
-        else "${relConfigDir}/${path}";
-
   configFile = yamlFormat.generate "goose-config.yaml" cfg.settings;
 
   providerFiles =
     lib.mapAttrs' (name: value:
-      lib.nameValuePair (homeRelative "custom_providers/${name}.json") {
+      lib.nameValuePair "goose/custom_providers/${name}.json" {
         source = jsonFormat.generate "goose-provider-${name}.json" value;
       }) cfg.customProviders;
 in
@@ -84,8 +63,9 @@ in
 
         Defaults to the `default` package exposed by this flake for the
         host system. Set to `null` to skip installing a package (useful
-        when goose is installed through another mechanism but you still
-        want to manage its configuration declaratively).
+        when goose is installed through another mechanism — for example
+        a wrapper derivation — but you still want to manage its
+        configuration declaratively).
       '';
     };
 
@@ -117,19 +97,16 @@ in
         }
       '';
       description = ''
-        Configuration written to goose's `config.yaml` (at
-        `$XDG_CONFIG_HOME/goose/config.yaml` on Linux, or
-        `~/Library/Application Support/Block/goose/config.yaml` on macOS).
-
-        This is a free-form attribute set serialised as YAML. See goose's
+        Free-form attribute set serialised as YAML into goose's
+        `config.yaml` (under `$XDG_CONFIG_HOME/goose/`). See goose's
         configuration documentation for the supported keys, including
-        `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_MODE`, and the `extensions`
-        map for MCP server definitions.
+        `GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_MODE`, and the
+        `extensions` map for MCP server definitions.
 
-        Note: secrets (API keys) are intentionally not handled here. Goose
-        reads them from the system keyring or environment variables; use
-        `home.sessionVariables`, sops-nix, or an equivalent tool for
-        secret material.
+        Note: secrets (API keys) are intentionally not handled here.
+        Goose reads them from the system keyring or environment
+        variables; use `home.sessionVariables`, sops-nix, or an
+        equivalent tool for secret material.
       '';
     };
 
@@ -153,11 +130,11 @@ in
         }
       '';
       description = ''
-        Declarative provider definitions written to goose's
-        `custom_providers/<name>.json` directory. Each attribute name
-        becomes the filename (without the `.json` suffix) and its value
-        is serialised directly as the provider JSON consumed by goose's
-        declarative providers loader.
+        Declarative provider definitions written to
+        `$XDG_CONFIG_HOME/goose/custom_providers/<name>.json`. Each
+        attribute name becomes the filename (without the `.json`
+        suffix) and its value is serialised directly as the provider
+        JSON consumed by goose's declarative providers loader.
       '';
     };
   };
@@ -165,9 +142,9 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = lib.optional (cfg.package != null) cfg.package;
 
-    home.file = lib.mkMerge [
+    xdg.configFile = lib.mkMerge [
       (lib.mkIf (cfg.settings != { }) {
-        ${homeRelative "config.yaml"}.source = configFile;
+        "goose/config.yaml".source = configFile;
       })
       providerFiles
     ];
