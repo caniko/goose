@@ -11,7 +11,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
-    flake-utils.lib.eachDefaultSystem (system:
+    (flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ rust-overlay.overlays.default ];
         pkgs = import nixpkgs { inherit system overlays; };
@@ -135,5 +135,10 @@
           '';
         };
       }
-    );
+    )) // {
+      homeManagerModules = rec {
+        goose = import ./nix/hm-module.nix { inherit self; };
+        default = goose;
+      };
+    };
 }
