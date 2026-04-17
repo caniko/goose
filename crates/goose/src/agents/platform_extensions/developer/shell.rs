@@ -40,6 +40,42 @@ fn flatpak_spawn_process() -> std::process::Command {
     command
 }
 
+#[cfg(not(windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnixShellFlavor {
+    Posix,
+    Nushell,
+}
+
+#[cfg(not(windows))]
+fn unix_shell_flavor(shell: &str) -> UnixShellFlavor {
+    let name = std::path::Path::new(shell)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+
+    match name.as_str() {
+        "nu" | "nushell" => UnixShellFlavor::Nushell,
+        _ => UnixShellFlavor::Posix,
+    }
+}
+
+#[cfg(not(windows))]
+fn unix_login_shell_command_args(shell: &str) -> [&'static str; 4] {
+    let probe = match unix_shell_flavor(shell) {
+        UnixShellFlavor::Nushell => "print ($env.PATH | str join (char esep))",
+        UnixShellFlavor::Posix => "echo $PATH",
+    };
+
+    ["-l", "-i", "-c", probe]
+}
+
+#[cfg(not(windows))]
+fn unix_shell_command_args(command_line: &str) -> [&str; 2] {
+    ["-c", command_line]
+}
+
 /// Resolve the preferred Unix shell, respecting GOOSE_SHELL.
 ///
 /// Returns `(shell_path, is_user_configured)` — the boolean is true when
@@ -143,16 +179,12 @@ pub struct ShellOutput {
 #[cfg(not(windows))]
 fn resolve_login_shell_path() -> Option<String> {
     let (shell, is_user_configured) = unix_shell();
+    let args = unix_login_shell_command_args(&shell);
 
     let mut child = if is_flatpak() {
         flatpak_spawn_process()
-            .args([
-                flatpak_shell_arg(&shell, is_user_configured),
-                "-l",
-                "-i",
-                "-c",
-                "echo $PATH",
-            ])
+            .arg(flatpak_shell_arg(&shell, is_user_configured))
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -160,7 +192,7 @@ fn resolve_login_shell_path() -> Option<String> {
             .ok()?
     } else {
         std::process::Command::new(&shell)
-            .args(["-l", "-i", "-c", "echo $PATH"])
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -528,12 +560,11 @@ fn build_shell_command(
             // binary). Otherwise use basename so the host's PATH resolves it.
             command
                 .arg(flatpak_shell_arg(&shell, is_user_configured))
-                .arg("-c")
-                .arg(command_line);
+                .args(unix_shell_command_args(command_line));
             command
         } else {
             let mut command = tokio::process::Command::new(shell);
-            command.arg("-c").arg(command_line);
+            command.args(unix_shell_command_args(command_line));
             if let Some(path) = working_dir {
                 command.current_dir(path);
             }
@@ -742,6 +773,37 @@ mod tests {
         let observed = std::fs::canonicalize(extract_text(&result)).unwrap();
         let expected = std::fs::canonicalize(dir.path()).unwrap();
         assert_eq!(observed, expected);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_shell_flavor_detects_nushell_names() {
+        assert_eq!(unix_shell_flavor("nu"), UnixShellFlavor::Nushell);
+        assert_eq!(unix_shell_flavor("nushell"), UnixShellFlavor::Nushell);
+        assert_eq!(
+            unix_shell_flavor("/etc/profiles/per-user/can/bin/nu"),
+            UnixShellFlavor::Nushell
+        );
+        assert_eq!(unix_shell_flavor("/bin/bash"), UnixShellFlavor::Posix);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_login_shell_command_args_use_nushell_probe() {
+        assert_eq!(
+            unix_login_shell_command_args("nu"),
+            ["-l", "-i", "-c", "print ($env.PATH | str join (char esep))"]
+        );
+        assert_eq!(
+            unix_login_shell_command_args("/bin/bash"),
+            ["-l", "-i", "-c", "echo $PATH"]
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_shell_command_args_wrap_commands_for_execution() {
+        assert_eq!(unix_shell_command_args("ls -la"), ["-c", "ls -la"]);
     }
 
     #[test]
